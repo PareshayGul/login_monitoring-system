@@ -1,15 +1,61 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link rel="stylesheet" href="C:\login\front_end.css">
-    <link rel="script" href="C:\login\front_end.js">
-    <title>Login monitoring system </title>
-  </head>
-  <body>
-     <div class="top-bar"></div>
-     <h1>Creating account for </h1>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Create Account</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300..700;1,300..700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="front_end.css">
+</head>
+<body>
+   <!-- Background Overlay Cutouts -->
+<img src="images/fairy.png" class="cutout cutout-fairy" alt="Fairy">
+<img src="images/trunk.png" class="cutout cutout-trunk" alt="Tree Trunk">
+<img src="images/branch.png" class="cutout cutout-branch" alt="Branch">
+<img src="images/tower.png" class="cutout cutout-tower" alt="Tower">
+<img src="images/home.png" class="cutout cutout-home" alt="Mushroom Home">
+<img src="images/lilies.png" class="cutout cutout-lilies" alt="Water Lilies">
 
-  </body>
+    <!-- Pink Oval Bow Frame Scroll (auth-frame) -->
+    <div class="frame-container auth-frame">
+        <h2>Create Account</h2>
+        <form id="signupForm">
+            <div class="form-group">
+                <label for="role">Primary Role</label>
+                <select id="role" name="role">
+                    <option value="User">User</option>
+                    <option value="Employee">Employee</option>
+                    <option value="Admin">Admin</option>
+                </select>
+            </div>
+
+            <div class="form-group hidden-group" id="workerIdGroup">
+                <label for="workerId" id="idLabel">Worker ID / Badge Number</label>
+                <input type="text" id="workerId" name="workerId" placeholder="Enter ID number">
+            </div>
+
+            <div class="form-group">
+                <label for="username">Username</label>
+                <input type="text" id="username" name="username" required>
+            </div>
+
+            <div class="form-group">
+                <label for="email">Email</label>
+                <input type="email" id="email" name="email" required>
+            </div>
+
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" required>
+            </div>
+
+            <button type="submit" class="submit-btn">Sign Up</button>
+        </form>
+        <p class="link-text">Already have an account? <a href="login.html">Log In</a></p>
+    </div>
+
+    <script src="front_end.js"></script>
+</body>
 </html>
