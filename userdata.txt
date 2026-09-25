@@ -1,0 +1,2 @@
+user,1,pareshaygul22@gmail.com,,0,33.5819,73.0331
+set "SENDER_EMAIL=pareshaygul22@gmail.com"

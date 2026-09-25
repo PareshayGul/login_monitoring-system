@@ -44,11 +44,11 @@ body {
 }
 
 .admin-frame {
-    width: 560px;
-    height: 420px;
+    width: 540px;
+    height: 400px;
     max-height: 80vh;
     background: url('images/admin_user_employee.png') no-repeat center center / 100% 100%;
-    padding: 40px 75px;
+    padding: 40px 70px;
     display: flex;
     flex-direction: column;
     justify-content: center;
