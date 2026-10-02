@@ -7,16 +7,18 @@
 #include <cstdlib>
 #include <thread>
 #include <vector>
+#include <ctime>
+#include <iomanip>
 #include "crow_all.h"
 #include <windows.h>
 #include <winhttp.h>
 
 #pragma comment(lib, "winhttp.lib")
 
-// Some Windows SDK headers define a few plain all-caps words as macros
-// for legacy reasons. If OPTIONS is one of them, it would silently mangle
-// every crow::HTTPMethod::OPTIONS below. This is harmless if it was never
-// defined in the first place.
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 #ifdef OPTIONS
 #undef OPTIONS
 #endif
@@ -24,14 +26,14 @@
 using namespace std;
 
 // ============================================================
-// Database classes - each one knows how to APPEND a new
-// signup record to its own file. Nothing else.
+// Database classes - APPENDs a new record with timestamp (0)
+// Format: username,password,email,id,attempts,lastLat,lastLong,lastTimestamp
 // ============================================================
 
 class Database {
 public:
     virtual void data(const string& name, const string& password,
-                       const string& email, const string& id) = 0;
+                      const string& email, const string& id) = 0;
     virtual ~Database() {}
 };
 
@@ -41,9 +43,9 @@ public:
               const string& email, const string& id) override {
         ofstream file("admindata.txt", ios::app);
         if (file.is_open()) {
-            // Trailing 0,0,0 = starting attempts, starting lastLat, starting lastLong
+            // Trailing 0,0,0,0 = attempts, lastLat, lastLong, lastTimestamp
             file << name << "," << password << "," << email << ","
-                 << id << ",0,0,0" << "\n";
+                 << id << ",0,0,0,0" << "\n";
             file.close();
         }
     }
@@ -56,7 +58,7 @@ public:
         ofstream file("userdata.txt", ios::app);
         if (file.is_open()) {
             file << name << "," << password << "," << email << ","
-                 << id << ",0,0,0" << "\n";
+                 << id << ",0,0,0,0" << "\n";
             file.close();
         }
     }
@@ -69,28 +71,81 @@ public:
         ofstream file("employeedata.txt", ios::app);
         if (file.is_open()) {
             file << name << "," << password << "," << email << ","
-                 << id << ",0,0,0" << "\n";
+                 << id << ",0,0,0,0" << "\n";
             file.close();
         }
     }
 };
 
 // ============================================================
-// LocationChecker - compares a new latitude/longitude pair
-// against a previously stored one to guess "is this a new place?"
+// LocationChecker - calculates distance and travel speed
 // ============================================================
 
 class LocationChecker {
+private:
+    double toRadians(double degree) const {
+        return degree * M_PI / 180.0;
+    }
+
+    // Haversine formula to compute distance in kilometers
+    double calculateDistanceKm(double lat1, double lon1, double lat2, double lon2) const {
+        double dLat = toRadians(lat2 - lat1);
+        double dLon = toRadians(lon2 - lon1);
+        double a = sin(dLat / 2.0) * sin(dLat / 2.0) +
+                   cos(toRadians(lat1)) * cos(toRadians(lat2)) *
+                   sin(dLon / 2.0) * sin(dLon / 2.0);
+        a = max(0.0, min(1.0, a));
+        double c = 2.0 * atan2(sqrt(a), sqrt(1.0 - a));
+        return 6371.0 * c; // Earth's mean radius in km
+    }
+
 public:
+    bool hasValidCoordinates(double latitude, double longitude) const {
+        return isfinite(latitude) && isfinite(longitude) &&
+               latitude >= -90.0 && latitude <= 90.0 &&
+               longitude >= -180.0 && longitude <= 180.0 &&
+               !(latitude == 0.0 && longitude == 0.0);
+    }
+
     bool isNewLocation(double lastLat, double lastLong,
                         double currentLat, double currentLong) {
-        if (lastLat == 0.0 && lastLong == 0.0) {
-            return false; // no previous location on record yet - nothing to compare
+        if (!hasValidCoordinates(lastLat, lastLong) ||
+            !hasValidCoordinates(currentLat, currentLong)) {
+            return false;
         }
         double latDiff = fabs(lastLat - currentLat);
         double longDiff = fabs(lastLong - currentLong);
-        // Rough threshold for a student project - not a precise distance calculation.
         return (latDiff > 0.5 || longDiff > 0.5);
+    }
+
+    // Checks if the speed required to travel between logins exceeds human capabilities
+    bool isImpossibleTravel(double lastLat, double lastLong, time_t lastTime,
+                            double currentLat, double currentLong, time_t currentTime,
+                            double maxSpeedKmH = 800.0) {
+        if (!hasValidCoordinates(lastLat, lastLong) ||
+            !hasValidCoordinates(currentLat, currentLong) ||
+            lastTime == 0 || currentTime <= lastTime) {
+            return false; // No previous baseline on record
+        }
+
+        double distanceKm = calculateDistanceKm(lastLat, lastLong, currentLat, currentLong);
+        double timeDiffSeconds = difftime(currentTime, lastTime);
+
+        // Ignore minor location jitter within 30 km
+        if (distanceKm < 30.0) {
+            return false;
+        }
+
+        // Extremely fast relocation in under 10 seconds over >30 km
+        if (timeDiffSeconds <= 10) {
+            return true;
+        }
+
+        double timeDiffHours = timeDiffSeconds / 3600.0;
+        double speedKmH = distanceKm / timeDiffHours;
+
+        // Flag if required travel speed exceeds airliner speed (~800 km/h)
+        return speedKmH > maxSpeedKmH;
     }
 };
 
@@ -104,17 +159,15 @@ protected:
     string password;
     string email;
     string id;
-    string storedPassword; // filled by lookupByUsername()
-    string storedEmail; // filled by lookupByUsername()
+    string storedPassword;
+    string storedEmail;
     int attempts;
     double lastLat;
     double lastLong;
+    time_t lastTimestamp;
 
-    // Every child must say which file it reads/writes and what its role is called.
     virtual string filename() const = 0;
 
-    // Finds this username in the file (regardless of password), and if found,
-    // fills storedPassword/attempts/lastLat/lastLong from that line.
     bool lookupByUsername() {
         string line;
         ifstream file(filename());
@@ -122,7 +175,7 @@ protected:
 
         while (getline(file, line)) {
             stringstream iss(line);
-            string fUsername, fPassword, fEmail, fId, fAttempts, fLat, fLong;
+            string fUsername, fPassword, fEmail, fId, fAttempts, fLat, fLong, fTime;
             getline(iss, fUsername, ',');
             getline(iss, fPassword, ',');
             getline(iss, fEmail, ',');
@@ -130,6 +183,7 @@ protected:
             getline(iss, fAttempts, ',');
             getline(iss, fLat, ',');
             getline(iss, fLong, ',');
+            getline(iss, fTime, ',');
 
             if (fUsername == username) {
                 storedPassword = fPassword;
@@ -137,6 +191,7 @@ protected:
                 attempts = fAttempts.empty() ? 0 : stoi(fAttempts);
                 lastLat = fLat.empty() ? 0.0 : stod(fLat);
                 lastLong = fLong.empty() ? 0.0 : stod(fLong);
+                lastTimestamp = fTime.empty() ? 0 : stoll(fTime);
                 file.close();
                 return true;
             }
@@ -145,16 +200,14 @@ protected:
         return false;
     }
 
-    // Rewrites the whole file, replacing only the line matching this username
-    // with an updated attempts/location, leaving every other line untouched.
-    void updateRecord(int newAttempts, double newLat, double newLong) {
+    void updateRecord(int newAttempts, double newLat, double newLong, time_t newTimestamp) {
         ifstream inFile(filename());
         stringstream buffer;
         string line;
 
         while (inFile.is_open() && getline(inFile, line)) {
             stringstream iss(line);
-            string fUsername, fPassword, fEmail, fId, fAttempts, fLat, fLong;
+            string fUsername, fPassword, fEmail, fId, fAttempts, fLat, fLong, fTime;
             getline(iss, fUsername, ',');
             getline(iss, fPassword, ',');
             getline(iss, fEmail, ',');
@@ -162,11 +215,12 @@ protected:
             getline(iss, fAttempts, ',');
             getline(iss, fLat, ',');
             getline(iss, fLong, ',');
+            getline(iss, fTime, ',');
 
             if (fUsername == username) {
                 buffer << fUsername << "," << fPassword << "," << fEmail << ","
                        << fId << "," << newAttempts << "," << newLat << ","
-                       << newLong << "\n";
+                       << newLong << "," << newTimestamp << "\n";
             } else {
                 buffer << line << "\n";
             }
@@ -181,10 +235,10 @@ protected:
 public:
     Person(string u, string p, string e, string i)
         : username(u), password(p), email(e), id(i),
-          attempts(0), lastLat(0.0), lastLong(0.0) {}
+          attempts(0), lastLat(0.0), lastLong(0.0), lastTimestamp(0) {}
 
-    virtual void credentials() = 0;      // writes a new signup record
-    virtual string roleName() const = 0; // "Admin" / "User" / "Employee"
+    virtual void credentials() = 0;
+    virtual string roleName() const = 0;
     virtual ~Person() {}
 
     bool alreadyExists() {
@@ -210,23 +264,21 @@ public:
         return false;
     }
 
-    // Returns true on a correct login. Resets the stored attempt count to 0
-    // on success, or increments it (persisted to the file) on failure.
     bool checkAttemptNumber() {
         if (!lookupByUsername()) {
-            return false; // no such account in this role's file at all
+            return false;
         }
         if (attempts >= 6) {
             cout << "Account locked: too many failed attempts." << endl;
             return false;
         }
         if (storedPassword == password) {
-            updateRecord(0, lastLat, lastLong);
+            updateRecord(0, lastLat, lastLong, lastTimestamp);
             attempts = 0;
             return true;
         }
         attempts++;
-        updateRecord(attempts, lastLat, lastLong);
+        updateRecord(attempts, lastLat, lastLong, lastTimestamp);
         if (attempts >= 6) {
             cout << "Maximum attempts reached. Account locked." << endl;
         }
@@ -238,13 +290,19 @@ public:
     string getEmail() const { return storedEmail; }
     double getLastLat() const { return lastLat; }
     double getLastLong() const { return lastLong; }
+    time_t getLastTimestamp() const { return lastTimestamp; }
 
-    void saveLoginLocation(double latitude, double longitude) {
-        if (latitude != 0.0 || longitude != 0.0) {
-            lastLat = latitude;
-            lastLong = longitude;
+    void saveLoginLocation(double latitude, double longitude, time_t currentTimestamp) {
+        if (!isfinite(latitude) || !isfinite(longitude) ||
+            latitude < -90.0 || latitude > 90.0 ||
+            longitude < -180.0 || longitude > 180.0 ||
+            (latitude == 0.0 && longitude == 0.0)) {
+            return;
         }
-        updateRecord(0, lastLat, lastLong);
+        lastLat = latitude;
+        lastLong = longitude;
+        lastTimestamp = currentTimestamp;
+        updateRecord(0, lastLat, lastLong, lastTimestamp);
     }
 };
 
@@ -282,9 +340,6 @@ public:
 // Crow HTTP routes
 // ============================================================
 
-// Adds the headers that tell the browser "requests from other origins
-// (like a local file, or a different port) are allowed." Without these,
-// the browser blocks the request before it ever reaches your route code.
 void addCorsHeaders(crow::response& res) {
     res.add_header("Access-Control-Allow-Origin", "*");
     res.add_header("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -308,6 +363,18 @@ string jsonEscape(const string& value) {
 
 wstring toWide(const string& value) {
     return wstring(value.begin(), value.end());
+}
+
+string locationText(double latitude, double longitude) {
+    if (!isfinite(latitude) || !isfinite(longitude) ||
+        (latitude == 0.0 && longitude == 0.0)) {
+        return "Location unavailable";
+    }
+    ostringstream location;
+    location << fixed << setprecision(6)
+             << "Latitude: " << latitude
+             << ", Longitude: " << longitude;
+    return location.str();
 }
 
 bool sendBrevoEmail(const string& recipient, const string& subject,
@@ -351,11 +418,24 @@ bool sendBrevoEmail(const string& recipient, const string& subject,
         const_cast<char*>(payload.c_str()), static_cast<DWORD>(payload.size()),
         static_cast<DWORD>(payload.size()), 0);
     BOOL received = sent && WinHttpReceiveResponse(request, nullptr);
+    DWORD statusCode = 0;
+    DWORD statusCodeSize = sizeof(statusCode);
+    if (received) {
+        WinHttpQueryHeaders(request,
+            WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+            WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusCodeSize,
+            WINHTTP_NO_HEADER_INDEX);
+    }
 
     WinHttpCloseHandle(request);
     WinHttpCloseHandle(connection);
     WinHttpCloseHandle(session);
-    return received == TRUE;
+    if (received && statusCode >= 200 && statusCode < 300) {
+        cout << "Brevo email accepted for delivery to " << recipient << endl;
+        return true;
+    }
+    cerr << "Brevo email request failed with HTTP status " << statusCode << endl;
+    return false;
 }
 
 void queueEmail(const string& recipient, const string& subject,
@@ -429,9 +509,8 @@ int main() {
         string password = body["password"].s();
         double latitude = body.has("latitude") ? body["latitude"].d() : 0.0;
         double longitude = body.has("longitude") ? body["longitude"].d() : 0.0;
+        time_t currentTime = time(nullptr); // Current login timestamp
 
-        // The login form doesn't ask for a role, so try each role's file
-        // until one recognizes this username.
         vector<unique_ptr<Person>> candidates;
         candidates.push_back(make_unique<Admin>(username, password, "", ""));
         candidates.push_back(make_unique<Employee>(username, password, "", ""));
@@ -442,24 +521,48 @@ int main() {
 
         for (auto& person : candidates) {
             if (person->checkAttemptNumber()) {
-                bool newLocation = locChecker.isNewLocation(
-                    person->getLastLat(), person->getLastLong(),
-                    latitude, longitude);
-                person->saveLoginLocation(latitude, longitude);
+                double lastLat = person->getLastLat();
+                double lastLong = person->getLastLong();
+                time_t lastTime = person->getLastTimestamp();
+
+                bool newLocation = locChecker.isNewLocation(lastLat, lastLong, latitude, longitude);
+                
+                // Detect impossible speed / rapid relocation between logins
+                bool rapidLocationChange = locChecker.isImpossibleTravel(
+                    lastLat, lastLong, lastTime, latitude, longitude, currentTime
+                );
+
+                person->saveLoginLocation(latitude, longitude, currentTime);
 
                 result["success"] = true;
                 result["role"] = person->roleName();
                 result["newLocation"] = newLocation;
+                result["impossibleTravel"] = rapidLocationChange;
 
-                queueEmail(person->getEmail(), "Successful login",
-                    "<p>Your " + person->roleName() +
-                    " account was used to log in successfully.</p>");
-
-                if (newLocation && (person->roleName() == "Admin" ||
-                                    person->roleName() == "Employee")) {
-                    queueEmail(person->getEmail(), "New login location detected",
-                        "<p>Your account was used to log in from a different location.</p>");
+                // 1. Send critical alarm email if impossible travel / rapid relocation is detected
+                if (rapidLocationChange) {
+                    queueEmail(person->getEmail(), 
+                        "URGENT SECURITY ALERT: Suspicious Rapid Login Location Change",
+                        "<h2 style='color:red;'>Security Alarm: Impossible Travel Detected</h2>"
+                        "<p>Your account was logged into from a distant location in an impossibly short period of time.</p>"
+                        "<p>Previous location: " + locationText(lastLat, lastLong) + "</p>"
+                        "<p>Current location: " + locationText(latitude, longitude) + "</p>"
+                        "<p>If this was not you, please change your password immediately.</p>");
                 }
+                // 2. Standard location notification for Admin / Employee
+                else if (newLocation && (person->roleName() == "Admin" || person->roleName() == "Employee")) {
+                    queueEmail(person->getEmail(), "New login location detected",
+                        "<p>Your account was used to log in from a different location.</p>"
+                        "<p>Previous location: " + locationText(lastLat, lastLong) + "</p>"
+                        "<p>Current location: " + locationText(latitude, longitude) + "</p>");
+                }
+                // 3. Regular success notification
+                else {
+                    queueEmail(person->getEmail(), "Successful login",
+                        "<p>Your " + person->roleName() + " account was used to log in successfully.</p>"
+                        "<p>Login location: " + locationText(latitude, longitude) + "</p>");
+                }
+
                 crow::response res{result};
                 addCorsHeaders(res);
                 return res;
